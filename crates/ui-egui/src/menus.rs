@@ -869,6 +869,7 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                         (tr("Copy"), "edit.copy"),
                         (tr("Paste here"), "edit.paste"),
                         (tr("Paste to replace"), "edit.pasteReplace"),
+                        (tr("Copy as"), COPY_AS),
                         ("-", ""),
                         (tr("Bring to front"), "arrange.front"),
                         (tr("Bring forward"), "arrange.forward"),
@@ -892,10 +893,6 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                         ("-", ""),
                         (tr("Flip horizontal"), "object.flipH"),
                         (tr("Flip vertical"), "object.flipV"),
-                        ("-", ""),
-                        (tr("Copy as CSS"), "edit.copyAsCss"),
-                        (tr("Copy as SVG"), "edit.copyAsSvg"),
-                        (tr("Copy as PNG"), "edit.copyAsPng"),
                         ("-", ""),
                         (tr("Delete"), "edit.delete"),
                     ]
@@ -926,9 +923,6 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                 {
                     entries.insert(at + 1, (label, "component.combineVariants"));
                 }
-                if let Some(at) = entries.iter().position(|e| e.1 == "edit.copyAsPng") {
-                    entries.insert(at + 1, (&copy_link, "edit.copyLink"));
-                }
                 // A right-clicked ruler guide (selected, with no layers) can be removed.
                 if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
                     entries.splice(0..0, [(tr("Remove guide"), "guide.remove"), ("-", "")]);
@@ -936,6 +930,29 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                 for (label, id) in &entries {
                     if *label == "-" {
                         separator(ui);
+                        continue;
+                    }
+                    if *id == COPY_AS {
+                        let copy_items = [
+                            (tr("Copy as CSS"), "edit.copyAsCss"),
+                            (tr("Copy as SVG"), "edit.copyAsSvg"),
+                            (tr("Copy as PNG"), "edit.copyAsPng"),
+                            (&*copy_link, "edit.copyLink"),
+                        ];
+                        let picked = submenu(ui, COPY_AS, label, &t, |ui| {
+                            let mut picked = None;
+                            for (label, id) in copy_items {
+                                let sc = crate::shortcuts::shortcut(id).unwrap_or("");
+                                if item(ui, label, sc, available(id), false, &t) {
+                                    picked = Some(id);
+                                }
+                            }
+                            picked
+                        });
+                        if let Some(id) = picked {
+                            invoke(app, id);
+                            close = true;
+                        }
                         continue;
                     }
                     let sc = crate::shortcuts::shortcut(id).unwrap_or("");
@@ -963,6 +980,9 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
 
 /// The context menu's Select layer submenu (its key in the context menu's tree).
 const SELECT_LAYER: &str = "Select layer";
+
+/// The context menu's Copy as submenu: its key in the tree, and the marker row in the entries.
+const COPY_AS: &str = "Copy as";
 
 fn select_layer_ask_id() -> Id {
     Id::new("ctx_select_layer_ask")
