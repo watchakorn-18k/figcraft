@@ -185,8 +185,10 @@ pub fn invoke(app: &mut FigApp, id: &str) {
             app.toast(tr("Copied as text"));
         }
         "edit.copyLink" => {
-            let ids = app.session.selection();
-            app.services.clipboard_set_text(&format!("figcraft://node/{}", ids.first().map(|i| i.0).unwrap_or(0)));
+            if let Some(id) = app.session.selection().first() {
+                app.services.clipboard_set_text(&format!("figcraft://node/{}", id.0));
+                app.toast(tr("Link copied"));
+            }
         }
         "edit.findReplace" => app.ui.find = Some((String::new(), String::new())),
         // The Actions palette invokes commands without parameters. These values are edited in
@@ -861,6 +863,7 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     .ok()
                     .filter(|doc| figcraft_engine::cmd::component::can_combine_variants(doc, &app.session.selection()))
                     .map(|_| i18n::command("component.combineVariants", "Combine as variants"));
+                let copy_link = i18n::command("edit.copyLink", "Copy link to selection");
                 let mut entries: Vec<(&str, &str)> = if has_sel {
                     vec![
                         (tr("Copy"), "edit.copy"),
@@ -922,6 +925,9 @@ pub fn popups(app: &mut FigApp, ctx: &egui::Context) {
                     && let Some(at) = entries.iter().position(|e| e.1 == "component.create")
                 {
                     entries.insert(at + 1, (label, "component.combineVariants"));
+                }
+                if let Some(at) = entries.iter().position(|e| e.1 == "edit.copyAsPng") {
+                    entries.insert(at + 1, (&copy_link, "edit.copyLink"));
                 }
                 // A right-clicked ruler guide (selected, with no layers) can be removed.
                 if !has_sel && app.session.ds().is_ok_and(|d| d.selected_guide().is_some()) {
