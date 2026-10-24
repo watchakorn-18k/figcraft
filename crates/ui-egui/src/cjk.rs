@@ -124,7 +124,7 @@ fn samples(need: u8, ui: u8) -> Vec<(char, Vec<&'static str>)> {
         (THAI, ('ก', THAI_FONTS.to_vec())),
     ];
     match ui {
-        HANGUL => v.reverse(),
+        HANGUL => v.swap(0, 2),
         HAN => v.swap(0, 1),
         BENGALI | THAI => {
             if let Some(pos) = v.iter().position(|(bit, _)| *bit == ui) {
@@ -157,6 +157,7 @@ pub fn faces(need: u8, lang: &str, have: &dyn Fn(char) -> bool) -> Vec<Arc<Face>
 mod tests {
     use super::*;
 
+    /// Each script is found in text and tied to its UI language code.
     #[test]
     fn scripts_and_languages() {
         assert_eq!(scripts("Frame 1"), 0);
@@ -185,6 +186,7 @@ mod tests {
         assert!(shows("en", true) && shows("tr", true));
     }
 
+    /// The UI language's script leads the fallback order; the others follow.
     #[test]
     fn the_ui_language_script_comes_first() {
         let order = |need, ui| samples(need, ui).into_iter().map(|(c, _)| c).collect::<String>();
@@ -196,6 +198,8 @@ mod tests {
         assert_eq!(order(HANGUL, 0), "한");
         assert_eq!(order(THAI, 0), "ก");
         assert_eq!(order(THAI | KANA, language("th")), "กあ");
+        // A Korean UI draws Hangul in a Korean face before the Thai or Bengali ones.
+        assert_eq!(order(KANA | HAN | HANGUL | BENGALI | THAI, HANGUL), "한漢あঅก");
         // Han without kana outside a Japanese or Korean UI reads as Chinese.
         assert_eq!(order(HAN, 0), "们");
         assert_eq!(first_face(HAN, 0), Some("Noto Sans CJK SC"));
