@@ -1103,3 +1103,20 @@ fn local_samples_round_trip() {
         assert_same(&a, &b, &format!("{} (export warnings: {warnings:?})", p.display()));
     }
 }
+
+#[test]
+fn images_are_named_by_their_sha1() {
+    let doc = generate(1);
+    assert!(!doc.images.is_empty());
+    let (file, _) = super::export::export(&doc, None).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(file)).unwrap();
+    let names: Vec<String> = z.file_names().filter(|n| n.starts_with("images/")).map(String::from).collect();
+    assert_eq!(names.len(), doc.images.len());
+    for name in names {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut z.by_name(&name).unwrap(), &mut bytes).unwrap();
+        let hash = super::export::image_hash(&bytes);
+        assert_eq!(hash.len(), 40);
+        assert_eq!(name, format!("images/{hash}"));
+    }
+}

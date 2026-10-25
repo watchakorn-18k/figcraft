@@ -191,6 +191,14 @@ pub fn export(doc: &Document, thumbnail: Option<&[u8]>) -> Result<(Vec<u8>, Vec<
     Ok((bytes, x.warnings))
 }
 
+/// The name of an image in a `.fig` file: the lowercase hex SHA-1 of its bytes (20 bytes in the
+/// paint's hash, 40 characters in `images/<hash>`). Other apps don't find an image named by
+/// another digest (our documents key images by SHA-256, [`crate::image_hash`]).
+pub(crate) fn image_hash(bytes: &[u8]) -> String {
+    use sha1::Digest;
+    sha1::Sha1::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn too_large() -> FormatError {
     FormatError::Io("the document is too large for a .fig file".into())
 }
@@ -1213,7 +1221,7 @@ impl<'d> Exporter<'d> {
             None => {
                 let h = match self.doc.images.get(key) {
                     Some(img) if img.bytes.len() as u64 <= MAX_IMAGE => {
-                        let h = crate::image_hash(&img.bytes);
+                        let h = image_hash(&img.bytes);
                         if !self.files.iter().any(|(x, _)| *x == h) {
                             self.files.push((h.clone(), img.bytes.clone()));
                         }
