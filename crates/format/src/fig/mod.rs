@@ -109,7 +109,25 @@ pub fn import(bytes: &[u8], name: &str) -> Result<(Document, Vec<String>), Forma
     let images = |r: &str| archive.image(r).or_else(|| embedded.get(r).cloned());
     let (doc, more) = crate::rest::import_with_networks(&json, &images, networks, max_nodes)?;
     warnings.extend(more.into_iter().filter_map(map::adapt_warning));
+    // Freeing the intermediate JSON of a large file takes seconds: not while the file waits.
+    free_later(json);
     Ok((doc, warnings))
+}
+
+/// Drops `value` on a thread of its own where there are threads (the browser has none to spare).
+fn free_later<T: Send + 'static>(value: T) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let cell = std::sync::Arc::new(std::sync::Mutex::new(Some(value)));
+        let moved = cell.clone();
+        // If no thread can start, the value is dropped here, as before.
+        let _ = std::thread::Builder::new().name("figcraft-free".into()).spawn(move || {
+            let taken = moved.lock().ok().and_then(|mut v| v.take());
+            drop(taken);
+        });
+    }
+    #[cfg(target_arch = "wasm32")]
+    drop(value);
 }
 
 /// A font style under the name the format uses: the standard weight names as words ("SemiBold"
