@@ -307,10 +307,7 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
                 });
             }
             ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(12.0));
-                ui.label(egui::RichText::new(tr("Opening the file…")).color(t.text_secondary));
-            });
+            ui.label(egui::RichText::new(tr("Opening the file…")).color(t.text_secondary));
             if loading {
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
