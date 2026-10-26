@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::task::{Context as TaskContext, Poll, Waker};
 
 use figcraft_doc::NodeId;
+use figcraft_engine::cmd::file::Preloaded;
 use serde_json::{Value, json};
 
 use crate::i18n::{tr, trf, trn};
@@ -24,6 +25,85 @@ pub struct PendingOpen {
     pub target: Option<ImportTarget>,
     /// The file's contents still on their way; they go into `params` as `data` once read.
     pub read: Option<ReadFuture>,
+    /// A file on disk being read and decoded on a thread of its own, so the window keeps drawing
+    /// while a large one opens; `file.open` then takes the result instead of reading the file.
+    pub load: Option<LoadState>,
+}
+
+pub enum LoadState {
+    Running(std::sync::mpsc::Receiver<Result<Preloaded, String>>),
+    Done(Box<Preloaded>),
+}
+
+/// Files this size and up load on a thread of their own ([`loads_in_background`]).
+const BACKGROUND_LOAD_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Whether the file at `path` is slow enough to open that it loads on a thread of its own: a `.fig`
+/// (decoded and rebuilt layer by layer) or any file of 8 MiB and up. Never in the browser, which
+/// has no threads to spare.
+pub fn loads_in_background(path: &str) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let p = std::path::Path::new(path);
+        p.extension().is_some_and(|e| e.eq_ignore_ascii_case("fig")) || std::fs::metadata(p).is_ok_and(|m| m.len() >= BACKGROUND_LOAD_BYTES)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        false
+    }
+}
+
+/// Starts loading `path` on a thread; `None` where there are no threads or one couldn't start.
+fn spawn_load(path: &str) -> Option<LoadState> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = path.to_string();
+        std::thread::Builder::new()
+            .name("figcraft-open".into())
+            .spawn(move || {
+                // A closed receiver means the user cancelled: the result is dropped.
+                let _ = tx.send(figcraft_engine::cmd::file::preload(&path).map_err(|e| e.to_string()));
+            })
+            .ok()?;
+        Some(LoadState::Running(rx))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Queues the file at `path` to open as a document of its own, loading it on a thread first.
+/// Callers checked [`loads_in_background`]; a file that can't be loaded that way opens at once.
+pub fn open_later(app: &mut FigApp, path: &str) {
+    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let params = json!({"path": path});
+    match spawn_load(path) {
+        Some(load) => app.ui.pending_opens.push(PendingOpen { label: name, params, command: "file.open", target: None, read: None, load: Some(load) }),
+        None => {
+            if app.run_user("file.open", params).is_some() {
+                app.ui.home = false;
+            }
+        }
+    }
+}
+
+/// `file.open` for `params` (from the Open dialog or the Home screen): at once, or behind the
+/// card with the file loading on a thread when it is a large one.
+pub(crate) fn open_user(app: &mut FigApp, params: Value) {
+    let plain = params.get("data").is_none() && params.get("variables").is_none();
+    let slow = params
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| plain && loads_in_background(p) && !app.session.docs.iter().any(|d| d.path.as_deref() == Some(*p)));
+    if let Some(path) = slow.map(str::to_string) {
+        open_later(app, &path);
+    } else if app.run_user("file.open", params).is_some() {
+        app.ui.home = false;
+    }
 }
 
 pub struct ImportTarget {
@@ -39,7 +119,7 @@ pub(crate) fn open_dropped(app: &mut FigApp, f: &egui::DroppedFileHandle) {
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     let (params, read) =
         if path.exists() { (json!({"path": path.to_string_lossy()}), None) } else { (json!({"name": name}), Some(crate::dropped_bytes(f, &name))) };
-    app.ui.pending_opens.push(PendingOpen { label: name, params, command: "file.open", target: None, read });
+    app.ui.pending_opens.push(PendingOpen { label: name, params, command: "file.open", target: None, read, load: None });
 }
 
 fn run_pending(app: &mut FigApp, pending: PendingOpen) -> Option<Value> {
@@ -124,10 +204,43 @@ fn read_contents(app: &mut FigApp, ctx: &egui::Context) -> bool {
     reading
 }
 
+/// Polls the files loading on threads: those that finished wait for their turn to open, those
+/// that failed are dropped with a message. Whether any are still loading.
+fn poll_loads(app: &mut FigApp) -> bool {
+    use std::sync::mpsc::TryRecvError;
+    let mut loading = false;
+    let mut failed = Vec::new();
+    app.ui.pending_opens.retain_mut(|pending| {
+        let Some(LoadState::Running(rx)) = pending.load.as_ref() else { return true };
+        match rx.try_recv() {
+            Ok(Ok(loaded)) => {
+                pending.load = Some(LoadState::Done(Box::new(loaded)));
+                true
+            }
+            Ok(Err(why)) => {
+                failed.push(format!("{}: {why}", pending.label));
+                false
+            }
+            Err(TryRecvError::Empty) => {
+                loading = true;
+                true
+            }
+            Err(TryRecvError::Disconnected) => {
+                failed.push(format!("{}: {}", pending.label, tr("The file couldn't be opened.")));
+                false
+            }
+        }
+    });
+    for why in failed {
+        app.show_error(why);
+    }
+    loading
+}
+
 /// The card while files wait, then (once it has been on screen and their contents are read) open
 /// them. Called before the import report, so a report for these files shows after them.
 pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
-    let reading = read_contents(app, ctx);
+    let reading = read_contents(app, ctx) | poll_loads(app);
     if app.ui.pending_opens.is_empty() {
         app.ui.pending_open_frames = 0;
         return;
@@ -144,7 +257,11 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
                 pending.params["x"] = json!(x);
             }
             let page = pending.target.as_ref().map(|t| (t.uid, t.page));
+            if let Some(LoadState::Done(loaded)) = pending.load.take() {
+                app.session.preloaded = Some(*loaded);
+            }
             let result = run_pending(app, pending);
+            app.session.preloaded = None;
             if result.is_some() && command == "file.open" {
                 app.ui.home = false;
             }
@@ -174,8 +291,10 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
     };
     let t = Tokens::get(ctx);
     let pending = &app.ui.pending_opens;
+    let loading = pending.iter().any(|p| p.load.is_some());
+    let mut cancel = false;
     // Shown at once: the frame after this one may block the window while the file opens.
-    crate::dialogs::window("", ctx).id(egui::Id::new("pending_open")).title_bar(false).movable(false).interactable(false).fade_in(false).show(
+    crate::dialogs::window("", ctx).id(egui::Id::new("pending_open")).title_bar(false).movable(false).fade_in(false).show(
         ctx,
         |ui| {
             ui.set_width(480.0);
@@ -192,6 +311,20 @@ pub fn pending_opens(app: &mut FigApp, ctx: &egui::Context) {
                 ui.add(egui::Spinner::new().size(12.0));
                 ui.label(egui::RichText::new(tr("Opening the file…")).color(t.text_secondary));
             });
+            if loading {
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tr("Large files can take a minute.")).color(t.text_secondary));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        cancel = ui.button(tr("Cancel")).clicked();
+                    });
+                });
+            }
         },
     );
+    if cancel {
+        // The threads finish on their own and their results are dropped.
+        app.ui.pending_opens.retain(|p| p.load.is_none());
+        app.ui.pending_open_frames = 0;
+    }
 }

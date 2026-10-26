@@ -498,6 +498,21 @@ pub fn load_bytes(bytes: &[u8], name_hint: &str) -> Result<(Document, Vec<String
     load_with(bytes, name_hint, None, &figcraft_format::rest::no_images).map(|(l, _)| (l.doc, l.issues))
 }
 
+/// A file read ahead of `file.open` (see [`preload`]).
+pub struct Preloaded {
+    path: String,
+    loaded: figcraft_format::Loaded,
+    rest: bool,
+}
+
+/// Reads and decodes the file at `path` without a session, so a large one can load on a thread of
+/// its own while the window keeps drawing. Hand the result to [`Session::preloaded`] and run
+/// `file.open {path}`: it takes the loaded file instead of reading it again.
+pub fn preload(path: &str) -> Result<Preloaded> {
+    let (loaded, rest) = load_path(path, None)?;
+    Ok(Preloaded { path: path.to_string(), loaded, rest })
+}
+
 /// [`load`] with the version history, also telling whether the file was REST API file JSON. A REST
 /// import reads its variables from `variables`, else from a variables JSON next to the file.
 pub fn load_path(path: &str, variables: Option<&Value>) -> Result<(figcraft_format::Loaded, bool)> {
@@ -707,7 +722,11 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         remember(s, &path);
         return Ok(json!({"index": i}));
     }
-    let (loaded, rest) = load_path(&path, variables.as_ref())?;
+    let preloaded = s.preloaded.take().filter(|p| p.path == path && variables.is_none());
+    let (loaded, rest) = match preloaded {
+        Some(p) => (p.loaded, p.rest),
+        None => load_path(&path, variables.as_ref())?,
+    };
     remember(s, &path);
     let native = !rest && matches!(ext(&path).as_str(), "figcraft" | "json");
     let warnings = rest || ext(&path) == "svg";
@@ -1728,5 +1747,33 @@ mod staging_write_tests {
             std::fs::set_permissions(&ro, perms).unwrap();
         }
         let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod preload_tests {
+    use super::*;
+
+    #[test]
+    fn a_preloaded_file_opens_without_being_read_again() {
+        let path = std::env::temp_dir().join(format!("figcraft-preload-{}.svg", std::process::id()));
+        let path = path.to_string_lossy().to_string();
+        std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>"#).unwrap();
+        let preloaded = preload(&path).unwrap();
+        // Gone from disk: only the preloaded copy can open it.
+        std::fs::remove_file(&path).unwrap();
+        let mut s = Session::empty();
+        s.preloaded = Some(preloaded);
+        let r = s.execute("file.open", &json!({"path": path})).unwrap();
+        assert_eq!(r["summary"]["pages"], 1);
+        assert_eq!(s.docs.len(), 1);
+        assert!(s.preloaded.is_none(), "taken");
+        // A file for another path is left alone and the open reads its own.
+        s.preloaded = Some(preload_for_test());
+        assert!(s.execute("file.open", &json!({"path": path})).is_err());
+    }
+
+    fn preload_for_test() -> Preloaded {
+        Preloaded { path: "other.svg".into(), loaded: Document::new("x").into(), rest: false }
     }
 }

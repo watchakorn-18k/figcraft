@@ -178,6 +178,7 @@ fn a_dropped_file_shows_its_report_once_it_opens() {
         command: "file.open",
         target: None,
         read: None,
+        load: None,
     });
     for _ in 0..6 {
         u.frame(vec![]);

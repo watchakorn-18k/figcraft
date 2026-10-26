@@ -598,6 +598,7 @@ fn a_dropped_file_whose_contents_arrive_later_opens_once_they_do() {
         command: "file.open",
         target: None,
         read: Some(later(&arrived)),
+        load: None,
     });
     // egui lays a new card out invisibly on its first frame.
     u.frame(vec![]);
@@ -629,6 +630,7 @@ fn a_dropped_file_that_cannot_be_read_says_so_and_opens_nothing() {
         command: "file.open",
         target: None,
         read: Some(later(&arrived)),
+        load: None,
     });
     for _ in 0..3 {
         u.frame(vec![]);
@@ -899,4 +901,49 @@ fn dropping_an_unsupported_file_on_the_home_screen_opens_nothing() {
     assert!(u.app.session.docs.is_empty());
     assert!(u.app.ui.home);
     assert_eq!(u.app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Drop a .figcraft, .fig, .json, .svg or image file."));
+}
+
+/// Frames until the files loading on threads are through, with a pause for the threads.
+fn until_opened(u: &mut Ui) {
+    for _ in 0..500 {
+        u.frame(vec![]);
+        if u.app.ui.pending_opens.is_empty() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn a_file_loaded_on_a_thread_opens_behind_the_card_once_it_is_read() {
+    let dir = Temp::new();
+    let path = dir.path("big.svg");
+    std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="red"/></svg>"#).unwrap();
+    let mut u = first_run();
+    u.app.ui.home = true;
+    crate::pending_open::open_later(&mut u.app, &path.to_string_lossy());
+    u.frame(vec![]);
+    assert_eq!(u.app.ui.pending_opens.len(), 1, "the card waits for the file");
+    assert!(u.app.session.docs.is_empty(), "nothing opened in the first frame");
+    until_opened(&mut u);
+    assert_eq!(u.app.ui.last_error, None);
+    assert_eq!(u.app.session.docs.len(), 1);
+    assert!(u.app.session.docs[0].doc.nodes().any(|n| matches!(n.kind, figcraft_doc::NodeKind::Rectangle)));
+    assert!(u.app.session.preloaded.is_none(), "the loaded file was taken");
+    assert!(!u.app.ui.home, "and the editor shows it");
+}
+
+#[test]
+fn a_fig_that_cannot_be_read_says_so_and_opens_nothing() {
+    let dir = Temp::new();
+    let path = dir.path("missing.fig");
+    assert!(crate::pending_open::loads_in_background(&path.to_string_lossy()), "a .fig always loads on a thread");
+    let mut u = first_run();
+    u.app.ui.home = true;
+    crate::pending_open::open_user(&mut u.app, json!({"path": path.to_string_lossy()}));
+    assert_eq!(u.app.ui.pending_opens.len(), 1);
+    until_opened(&mut u);
+    assert!(u.app.ui.last_error.as_deref().is_some_and(|e| e.starts_with("missing.fig")), "{:?}", u.app.ui.last_error);
+    assert!(u.app.session.docs.is_empty());
+    assert!(u.app.ui.home, "the home screen stays");
 }

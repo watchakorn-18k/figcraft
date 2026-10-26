@@ -603,9 +603,7 @@ pub fn section(app: &mut FigApp, ui: &mut Ui, t: &Tokens, query: &str) -> usize 
     action = action.or(chosen);
     match action {
         Some(Action::Open(path)) => {
-            if app.run_user("file.open", json!({"path": path})).is_some() {
-                app.ui.home = false;
-            }
+            crate::pending_open::open_user(app, json!({"path": path}));
         }
         Some(Action::Reveal(path)) => app.services.reveal_path(Path::new(&path)),
         Some(Action::Remove(path)) => {

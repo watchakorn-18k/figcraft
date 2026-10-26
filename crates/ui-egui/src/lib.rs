@@ -1193,9 +1193,7 @@ impl FigApp {
     pub fn open_dialog(&mut self) {
         // Opening needs no file in front: it goes ahead even if that file closed meanwhile.
         self.pick_file(i18n::tr("Open"), OPEN_EXTENSIONS, false, |app, file| {
-            if app.run_user("file.open", file).is_some() {
-                app.ui.home = false;
-            }
+            pending_open::open_user(app, file);
         });
     }
 

@@ -799,6 +799,9 @@ pub struct Session {
     pub live: live::Lives,
     /// Commands the UI runs without waiting on a server ([`Session::start_background`]).
     pub background: background::Background,
+    /// A file read on another thread ([`cmd::file::preload`]) for `file.open` to take instead of
+    /// reading it again on this one.
+    pub preloaded: Option<cmd::file::Preloaded>,
 }
 
 impl Default for Session {
@@ -846,6 +849,7 @@ impl Session {
             plugins: plugins::Runtime::default(),
             live: live::Lives::default(),
             background: background::Background::default(),
+            preloaded: None,
         }
     }
 
