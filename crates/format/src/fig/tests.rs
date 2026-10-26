@@ -859,10 +859,13 @@ fn the_layer_cap_follows_the_file_size() {
     // A small (or broken) file keeps the REST import's cap: instances expand into a layer per
     // layer of their component, and a few bytes mustn't claim millions of layers.
     assert_eq!(layer_budget(0), crate::rest::MAX_NODES);
-    assert_eq!(layer_budget(1 << 20), crate::rest::MAX_NODES);
+    assert_eq!(layer_budget(1 << 19), crate::rest::MAX_NODES);
     // A real 894 004-layer file (an 83.5 MB canvas) stopped at 200 000 and came in with 27 of
     // its 30 pages empty.
     assert!(layer_budget(83_491_232) > 894_004);
+    // A real 888 315-layer file (an 8.3 MB canvas: 150 MB with its images, mostly instances of
+    // components) stopped at 258 775 and came in with 21 of its 28 pages empty.
+    assert!(layer_budget(8_300_000) > 888_315);
     // No file gets more than the ceiling.
     assert_eq!(layer_budget(MAX_CANVAS as usize), MAX_FIG_NODES);
 }

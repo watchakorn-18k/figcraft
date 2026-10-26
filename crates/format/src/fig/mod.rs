@@ -65,7 +65,7 @@ const MAX_CHUNKS: usize = 16;
 /// expand into a layer per layer of their component, and chunks inflate up to [`MAX_CHUNK`], so the
 /// budget follows what the file takes, not what it unpacks to: a small file can't claim a large
 /// count, however it's built; a large one gets room.
-const PACKED_BYTES_PER_LAYER: usize = 32;
+const PACKED_BYTES_PER_LAYER: usize = 4;
 const MAX_FIG_NODES: usize = 2_000_000;
 
 /// Most layers imported from a `.fig` file whose compressed canvas is `packed` bytes.
